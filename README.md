@@ -1,6 +1,6 @@
 # UUIDv7
 
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.robsonkades/uuid)](https://search.maven.org/artifact/io.github.robsonkades/uuid)  
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.robsonkades/uuidv7)](https://search.maven.org/artifact/io.github.robsonkades/uuidv7)  
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)  
 [![Build Status](https://github.com/robsonkades/uuid/actions/workflows/maven.yml/badge.svg)](https://github.com/robsonkades/uuid/actions)
 
@@ -43,7 +43,7 @@ UUIDv7 is ideal for distributed systems, microservices, databases, and high-thro
 ```xml
 <dependency>
   <groupId>io.github.robsonkades</groupId>
-  <artifactId>uuid</artifactId>
+  <artifactId>uuidv7</artifactId>
   <version>1.0.1</version>
 </dependency>
 ```
