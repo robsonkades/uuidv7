@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)  
 [![Build Status](https://github.com/robsonkades/uuid/actions/workflows/maven.yml/badge.svg)](https://github.com/robsonkades/uuid/actions)
 
-**UUIDv7** is a small, high-performance Java library for generating [UUID version 7](https://www.ietf.org/archive/id/draft-ietf-uuidrev-rfc4122bis-02.html) identifiers, combining a 48-bit millisecond timestamp with 74 bits of high-quality entropy. Unlike the standard `java.util.UUID.randomUUID()`, this implementation:
+**UUIDv7** is a small, high-performance Java library for generating [UUID version 7](https://www.rfc-editor.org/rfc/rfc9562#name-uuid-version-7) identifiers, combining a 48-bit millisecond timestamp with 74 bits of high-quality entropy. Unlike the standard `java.util.UUID.randomUUID()`, this implementation:
 
 - Uses **ThreadLocalRandom** (non-blocking, fast PRNG) instead of `SecureRandom`.
 - Avoids intermediate `byte[16]` allocations and `ByteBuffer` overhead.
