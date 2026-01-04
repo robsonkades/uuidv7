@@ -91,6 +91,32 @@ Below is a summary of benchmark results comparing the naïve UUIDv7 implementati
    - The optimized version triggers ~268 collections, spending ~215 ms total in GC.
    - In both cases, GC overhead is negligible relative to total execution time, but the optimized version still wins because it produces far more UUIDs in the same wall-clock time.
 
+
+### Benchmark
+
+| Benchmark                                           | Version                                   | Mode  | Cnt | Score       | Error       | Units   |
+|----------------------------------------------------|-------------------------------------------|-------|-----|-------------|-------------|---------|
+| UUIDV7Benchmark.benchGenerate                      | java.util.UUID                            | thrpt | 20  | 4261.388    | ± 39.561    | ops/ms  |
+| UUIDV7Benchmark.benchGenerate:gc.alloc.rate        | java.util.UUID                            | thrpt | 20  | 975.192     | ± 9.078     | MB/sec  |
+| UUIDV7Benchmark.benchGenerate:gc.alloc.rate.norm   | java.util.UUID                            | thrpt | 20  | 240.002     | ± 0.001     | B/op    |
+| UUIDV7Benchmark.benchGenerate:gc.count             | java.util.UUID                            | thrpt | 20  | 66.000      |             | counts  |
+| UUIDV7Benchmark.benchGenerate:gc.time              | java.util.UUID                            | thrpt | 20  | 32.000      |             | ms      |
+| UUIDV7Benchmark.benchGenerate                      | io.github.robsonkades:uuidv7              | thrpt | 20  | 148359.782  | ± 1159.173  | ops/ms  |
+| UUIDV7Benchmark.benchGenerate:gc.alloc.rate        | io.github.robsonkades:uuidv7              | thrpt | 20  | 4526.684    | ± 35.304    | MB/sec  |
+| UUIDV7Benchmark.benchGenerate:gc.alloc.rate.norm   | io.github.robsonkades:uuidv7              | thrpt | 20  | 32.000      | ± 0.001     | B/op    |
+| UUIDV7Benchmark.benchGenerate:gc.count             | io.github.robsonkades:uuidv7              | thrpt | 20  | 174.000     |             | counts  |
+| UUIDV7Benchmark.benchGenerate:gc.time              | io.github.robsonkades:uuidv7              | thrpt | 20  | 105.000     |             | ms      |
+| UUIDV7Benchmark.benchGenerate                      | com.github.f4b6a3:uuid-creator            | thrpt | 20  | 69965.993   | ± 117.158   | ops/ms  |
+| UUIDV7Benchmark.benchGenerate:gc.alloc.rate        | com.github.f4b6a3:uuid-creator            | thrpt | 20  | 2134.816    | ± 3.575     | MB/sec  |
+| UUIDV7Benchmark.benchGenerate:gc.alloc.rate.norm   | com.github.f4b6a3:uuid-creator            | thrpt | 20  | 32.000      | ± 0.001     | B/op    |
+| UUIDV7Benchmark.benchGenerate:gc.count             | com.github.f4b6a3:uuid-creator            | thrpt | 20  | 120.000     |             | counts  |
+| UUIDV7Benchmark.benchGenerate:gc.time              | com.github.f4b6a3:uuid-creator            | thrpt | 20  | 69.000      |             | ms      |
+| UUIDV7Benchmark.benchGenerate                      | com.fasterxml.uuid:java-uuid-generator    | thrpt | 20  | 4074.375    | ± 27.374    | ops/ms  |
+| UUIDV7Benchmark.benchGenerate:gc.alloc.rate        | com.fasterxml.uuid:java-uuid-generator    | thrpt | 20  | 1118.863    | ± 7.527     | MB/sec  |
+| UUIDV7Benchmark.benchGenerate:gc.alloc.rate.norm   | com.fasterxml.uuid:java-uuid-generator    | thrpt | 20  | 288.002     | ± 0.001     | B/op    |
+| UUIDV7Benchmark.benchGenerate:gc.count             | com.fasterxml.uuid:java-uuid-generator    | thrpt | 20  | 76.000      |             | counts  |
+| UUIDV7Benchmark.benchGenerate:gc.time              | com.fasterxml.uuid:java-uuid-generator    | thrpt | 20  | 41.000      |             | ms      |
+
 ---
 
 ## License
