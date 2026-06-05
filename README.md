@@ -1,44 +1,31 @@
 # UUIDv7
 
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.robsonkades/uuidv7)](https://search.maven.org/artifact/io.github.robsonkades/uuidv7)  
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)  
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.robsonkades/uuidv7)](https://search.maven.org/artifact/io.github.robsonkades/uuidv7)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Build Status](https://github.com/robsonkades/uuid/actions/workflows/maven.yml/badge.svg)](https://github.com/robsonkades/uuid/actions)
 
-**UUIDv7** is a small, high-performance Java library for generating [UUID version 7](https://www.rfc-editor.org/rfc/rfc9562#name-uuid-version-7) identifiers, combining a 48-bit millisecond timestamp with 74 bits of high-quality entropy. Unlike the standard `java.util.UUID.randomUUID()`, this implementation:
+`uuidv7` is a small, dependency-free Java library for generating RFC 9562 UUID version 7 identifiers.
+It is designed for production workloads that care about time ordering, throughput, low allocation pressure, and multicore scalability.
 
-- Uses **ThreadLocalRandom** (non-blocking, fast PRNG) instead of `SecureRandom`.
-- Avoids intermediate `byte[16]` allocations and `ByteBuffer` overhead.
-- Produces about **50× the throughput** of a naïve implementation while still conforming to the RFC 9562 layout.
-- Minimizes per-UUID garbage (≈32 B per call vs. ≈176 B in a typical version).
+The library exposes two generation modes:
 
-UUIDv7 is ideal for distributed systems, microservices, databases, and high-throughput applications that need time-sortable unique identifiers without sacrificing performance.
-
----
-
-### Table of Contents
-
-1. [Features](#features)
-2. [Quick Start](#quick-start)
-3. [Performance Comparison](#performance-comparison)
-4. [License](#license)
-5. [Contributing](#contributing)
-
----
+- `UUIDv7.randomUUID()` is the default high-throughput API. It uses per-thread state, avoids shared hot-path contention, and preserves monotonic ordering for values produced by the same thread within the same millisecond.
+- `UUIDv7.secureRandomUUID()` is the stronger-entropy API. It uses `SecureRandom` to seed and advance the UUID state, which improves unpredictability at a much higher per-call cost.
 
 ## Features
 
-- **Fully RFC-compliant** UUID v7 format (48 bits timestamp, 4 bits version, 2 bits variant, 74 bits random).
-- **Extremely low overhead**: only one `UUID` object allocation per call (≈32 bytes).
-- **High throughput**: bench tests show ~200 million UUID/s on modern hardware.
-- **Thread-safe**: uses `ThreadLocalRandom` internally.
-- **Zero external dependencies** beyond the JDK.
-- **Java 8+ compatible** (tested up through Java 17/21).
-
----
+- RFC 9562 UUIDv7 layout
+- 48-bit Unix epoch timestamp in milliseconds
+- Correct version and variant bits
+- Clock rollback handling
+- Same-millisecond monotonic sequencing
+- No runtime dependencies beyond the JDK
+- Java 17+
+- Fast path allocates only the returned `UUID` object
 
 ## Quick Start
 
-### Maven Dependency
+### Maven
 
 ```xml
 <dependency>
@@ -48,76 +35,100 @@ UUIDv7 is ideal for distributed systems, microservices, databases, and high-thro
 </dependency>
 ```
 
-After adding the dependency, run:
+### Usage
 
-```mvn clean install```
+```java
+import io.github.robsonkades.uuidv7.UUIDv7;
 
-# Performance Comparison & License
+import java.util.UUID;
 
-## Performance Comparison
+UUID fast = UUIDv7.randomUUID();
+UUID secure = UUIDv7.secureRandomUUID();
+```
 
-Below is a summary of benchmark results comparing the naïve UUIDv7 implementation (using `SecureRandom` + `ByteBuffer`) with this optimized implementation (using `ThreadLocalRandom` + bitwise assembly). All measurements were taken on a modern 8-core CPU (Intel/AMD), Java 17, Linux SSD, with JMH settings: 5 warmup iterations, 5 measurement iterations, 2 forks, single-threaded throughput mode.
+### Which API should I use?
 
-| Implementation                    | Throughput (ops/ms) | Bytes Allocated per UUID (B/op) | GC Alloc Rate (MB/s) |
-|-----------------------------------|---------------------|---------------------------------|----------------------|
-| **SecureRandom + ByteBuffer**     | ~4 725 (≈4.7 M/s)   | ~176 B                          | ~793 MB/s            |
-| **Optimized (ThreadLocalRandom)** | ~227 174 (≈227 M/s) | ~32 B                           | ~6 931 MB/s          |
+- Use `UUIDv7.randomUUID()` for database keys, event IDs, trace IDs, queue message IDs, and other high-volume identifiers.
+- Use `UUIDv7.secureRandomUUID()` only if stronger entropy in the UUID payload matters more than raw throughput.
+- Do not use UUIDv7 as a secret token format. UUIDv7 embeds creation time by design.
 
-- **Throughput**
-   - *Naïve*: ~4 725 ops/ms → ≈4.7 million UUIDs per second.
-   - *Optimized*: ~227 174 ops/ms → ≈227 million UUIDs per second.
-   - Result: **≈50× faster** throughput in the optimized version.
+## Design Notes
 
-- **Bytes Allocated per UUID**
-   - *Naïve*: ~176 bytes of garbage (creates `byte[16]` + `ByteBuffer` + one `UUID`).
-   - *Optimized*: ~32 bytes of garbage (only one `UUID` object).
-   - Result: **≈82% fewer bytes** allocated per call.
+The implementation is intentionally optimized around the real bottlenecks of UUID generation on the JVM:
 
-- **GC Allocation Rate (MB/s)**
-   - *Naïve*: ~793 MB allocated per second.
-   - *Optimized*: ~6 931 MB allocated per second (because it generates far more UUIDs).
-   - Although the optimized version allocates more in absolute MB/s, it does **not** increase per-UUID allocation—thus total throughput is massively higher and GC pauses, while more frequent, remain a small fraction of total runtime.
+- The fast generator keeps mutable state in `ThreadLocal` storage, which avoids global locks, atomics, and cache-line ping-pong under contention.
+- UUID bit packing is done directly into two `long` values. No `byte[16]`, `ByteBuffer`, boxing, or formatting work happens on the hot path.
+- If the wall clock moves backwards, the generator reuses the last logical timestamp and advances monotonic state instead of emitting a smaller UUID.
+- If the same-millisecond counter space is exhausted, the generator advances to the next logical millisecond rather than knowingly wrapping and returning duplicates.
+- The secure generator keeps the same state machine, but uses `SecureRandom` to seed new timestamps and to advance same-millisecond state with positive random increments.
 
-### Observations
+## Benchmark Methodology
 
-1. **Throughput Gain**  
-   The optimized code leverages non-blocking `ThreadLocalRandom` and direct 64-bit/bitwise assembly, eliminating array and buffer overhead. The result is order-of-magnitude faster UUID generation, making it suitable for high-throughput, low-latency systems.
+Benchmarks were run with JMH 1.37 on this repository's current implementation and benchmark suite.
 
-2. **Garbage Generation**  
-   By reducing each call to a single 32-byte `UUID` allocation, the optimized approach minimizes per-call garbage. This keeps pause times short even when producing hundreds of millions of UUIDs per second.
+- JVM: GraalVM CE 25.0.2
+- Hardware: 24 logical CPUs
+- JVM args: `-Xms1g -Xmx1g`
+- Warmup: 5 iterations x 1 second
+- Measurement: 5 iterations x 1 second
+- Forks: 2
+- Benchmark source: `src/test/java/io/github/robsonkades/uuidv7/UUIDv7Benchmark.java`
 
-3. **GC Behavior**
-   - The naïve version triggers ~54 collections, spending ~35 ms total in GC during the measured period.
-   - The optimized version triggers ~268 collections, spending ~215 ms total in GC.
-   - In both cases, GC overhead is negligible relative to total execution time, but the optimized version still wins because it produces far more UUIDs in the same wall-clock time.
+Comparison targets:
 
+- `optimizedFast`: `UUIDv7.randomUUID()`
+- `optimizedSecure`: `UUIDv7.secureRandomUUID()`
+- `legacyThreadLocalRandom`: previous no-state baseline
+- `naiveSecureRandomByteBuffer`: `SecureRandom` + `byte[16]` + `ByteBuffer`
+- `uuidCreator`: `com.github.f4b6a3:uuid-creator`
+- `uuidCreatorFast`: `com.github.f4b6a3:uuid-creator` fast mode
+- `jugEpoch`: `com.fasterxml.uuid:java-uuid-generator`
 
-### Benchmark
+These results are point-in-time measurements, not universal constants. Different JVMs, CPU topologies, entropy providers, and OS timer behavior will change the exact numbers.
 
-| Benchmark                                           | Version                                   | Mode  | Cnt | Score       | Error       | Units   |
-|----------------------------------------------------|-------------------------------------------|-------|-----|-------------|-------------|---------|
-| UUIDV7Benchmark.benchGenerate                      | java.util.UUID                            | thrpt | 20  | 4261.388    | ± 39.561    | ops/ms  |
-| UUIDV7Benchmark.benchGenerate:gc.alloc.rate        | java.util.UUID                            | thrpt | 20  | 975.192     | ± 9.078     | MB/sec  |
-| UUIDV7Benchmark.benchGenerate:gc.alloc.rate.norm   | java.util.UUID                            | thrpt | 20  | 240.002     | ± 0.001     | B/op    |
-| UUIDV7Benchmark.benchGenerate:gc.count             | java.util.UUID                            | thrpt | 20  | 66.000      |             | counts  |
-| UUIDV7Benchmark.benchGenerate:gc.time              | java.util.UUID                            | thrpt | 20  | 32.000      |             | ms      |
-| UUIDV7Benchmark.benchGenerate                      | io.github.robsonkades:uuidv7              | thrpt | 20  | 148359.782  | ± 1159.173  | ops/ms  |
-| UUIDV7Benchmark.benchGenerate:gc.alloc.rate        | io.github.robsonkades:uuidv7              | thrpt | 20  | 4526.684    | ± 35.304    | MB/sec  |
-| UUIDV7Benchmark.benchGenerate:gc.alloc.rate.norm   | io.github.robsonkades:uuidv7              | thrpt | 20  | 32.000      | ± 0.001     | B/op    |
-| UUIDV7Benchmark.benchGenerate:gc.count             | io.github.robsonkades:uuidv7              | thrpt | 20  | 174.000     |             | counts  |
-| UUIDV7Benchmark.benchGenerate:gc.time              | io.github.robsonkades:uuidv7              | thrpt | 20  | 105.000     |             | ms      |
-| UUIDV7Benchmark.benchGenerate                      | com.github.f4b6a3:uuid-creator            | thrpt | 20  | 69965.993   | ± 117.158   | ops/ms  |
-| UUIDV7Benchmark.benchGenerate:gc.alloc.rate        | com.github.f4b6a3:uuid-creator            | thrpt | 20  | 2134.816    | ± 3.575     | MB/sec  |
-| UUIDV7Benchmark.benchGenerate:gc.alloc.rate.norm   | com.github.f4b6a3:uuid-creator            | thrpt | 20  | 32.000      | ± 0.001     | B/op    |
-| UUIDV7Benchmark.benchGenerate:gc.count             | com.github.f4b6a3:uuid-creator            | thrpt | 20  | 120.000     |             | counts  |
-| UUIDV7Benchmark.benchGenerate:gc.time              | com.github.f4b6a3:uuid-creator            | thrpt | 20  | 69.000      |             | ms      |
-| UUIDV7Benchmark.benchGenerate                      | com.fasterxml.uuid:java-uuid-generator    | thrpt | 20  | 4074.375    | ± 27.374    | ops/ms  |
-| UUIDV7Benchmark.benchGenerate:gc.alloc.rate        | com.fasterxml.uuid:java-uuid-generator    | thrpt | 20  | 1118.863    | ± 7.527     | MB/sec  |
-| UUIDV7Benchmark.benchGenerate:gc.alloc.rate.norm   | com.fasterxml.uuid:java-uuid-generator    | thrpt | 20  | 288.002     | ± 0.001     | B/op    |
-| UUIDV7Benchmark.benchGenerate:gc.count             | com.fasterxml.uuid:java-uuid-generator    | thrpt | 20  | 76.000      |             | counts  |
-| UUIDV7Benchmark.benchGenerate:gc.time              | com.fasterxml.uuid:java-uuid-generator    | thrpt | 20  | 41.000      |             | ms      |
+## Benchmark Results
 
----
+### Single-Thread Throughput
+
+| Implementation | Throughput | Allocation |
+|---|---:|---:|
+| `optimizedFast` | 250.3 M ops/s | 32.0 B/op |
+| `legacyThreadLocalRandom` | 279.1 M ops/s | 32.0 B/op |
+| `jugEpoch` | 69.4 M ops/s | 32.0 B/op |
+| `uuidCreatorFast` | 35.7 M ops/s | 64.0 B/op |
+| `naiveSecureRandomByteBuffer` | 3.75 M ops/s | 208.0 B/op |
+| `uuidCreator` | 3.59 M ops/s | 231.3 B/op |
+| `optimizedSecure` | 1.86 M ops/s | 368.2 B/op |
+
+### 24-Thread Throughput
+
+| Implementation | Throughput | Allocation |
+|---|---:|---:|
+| `optimizedFast` | 1.069 B ops/s | 32.0 B/op |
+| `legacyThreadLocalRandom` | 1.081 B ops/s | 32.0 B/op |
+| `uuidCreatorFast` | 27.8 M ops/s | 64.3 B/op |
+| `optimizedSecure` | 21.8 M ops/s | 368.4 B/op |
+| `jugEpoch` | 10.6 M ops/s | 32.6 B/op |
+| `uuidCreator` | 2.44 M ops/s | 225.0 B/op |
+| `naiveSecureRandomByteBuffer` | 2.23 M ops/s | 208.0 B/op |
+
+### Single-Thread Sample Latency
+
+| Implementation | Mean | p95 | p99 | p99.9 |
+|---|---:|---:|---:|---:|
+| `optimizedFast` | 32.1 ns | 100 ns | 100 ns | 221.3 ns |
+| `jugEpoch` | 38.6 ns | 100 ns | 100 ns | 300.0 ns |
+| `uuidCreatorFast` | 54.4 ns | 100 ns | 100 ns | 400.0 ns |
+| `naiveSecureRandomByteBuffer` | 328.7 ns | 300 ns | 400 ns | 9486.7 ns |
+
+## Reading the Results
+
+- `optimizedFast` stays close to the bare `ThreadLocalRandom` baseline in single-thread mode while adding rollback handling and same-thread monotonic sequencing.
+- Under 24-thread load, `optimizedFast` scales essentially linearly and remains near the legacy baseline, which is the main design goal of the implementation.
+- `optimizedFast` is about 67x faster than the naive `SecureRandom + ByteBuffer` baseline in single-thread throughput and about 480x faster at 24 threads.
+- `optimizedFast` is about 7x faster than `uuidCreatorFast` in single-thread throughput and about 38x faster at 24 threads.
+- `jugEpoch` and `uuidCreator` show a large collapse under contention, which strongly suggests shared internal coordination costs.
+- `optimizedSecure` is intentionally much slower than `optimizedFast`. That is the expected trade-off for stronger entropy and random monotonic increments.
 
 ## License
 
@@ -125,4 +136,4 @@ This project is licensed under the MIT License. See [LICENSE](./LICENSE) for det
 
 ## Contributing
 
-Contributions, bug reports, and feature requests are always welcome! Please see [CONTRIBUTING.md](./CONTRIBUTING.md) for more details.
+Contributions, bug reports, and feature requests are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md).
