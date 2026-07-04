@@ -3,6 +3,7 @@
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.robsonkades/uuidv7)](https://search.maven.org/artifact/io.github.robsonkades/uuidv7)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Build Status](https://github.com/robsonkades/uuid/actions/workflows/maven.yml/badge.svg)](https://github.com/robsonkades/uuid/actions)
+[![javadoc](https://javadoc.io/badge2/io.github.robsonkades/uuidv7/javadoc.svg)](https://javadoc.io/doc/io.github.robsonkades/uuidv7)
 
 `uuidv7` is a small, dependency-free Java library for generating RFC 9562 UUID version 7 identifiers.
 It is designed for production workloads that care about time ordering, throughput, low allocation pressure, and multicore scalability.
