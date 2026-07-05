@@ -9,10 +9,12 @@ import org.openjdk.jmh.annotations.Fork;
 import org.openjdk.jmh.annotations.Level;
 import org.openjdk.jmh.annotations.Measurement;
 import org.openjdk.jmh.annotations.Mode;
+import org.openjdk.jmh.annotations.OperationsPerInvocation;
 import org.openjdk.jmh.annotations.OutputTimeUnit;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
+import org.openjdk.jmh.annotations.Threads;
 import org.openjdk.jmh.annotations.Warmup;
 
 import java.nio.ByteBuffer;
@@ -104,6 +106,64 @@ public class UUIDv7Benchmark {
     @OutputTimeUnit(TimeUnit.NANOSECONDS)
     public UUID latencyNaiveSecureRandomByteBuffer() {
         return naive.next();
+    }
+
+    private static final int BATCH_SIZE = 256;
+
+    @State(Scope.Thread)
+    public static class ThreadBuffers {
+        public final long[] longs = new long[2 * BATCH_SIZE];
+        public final byte[] bytes = new byte[16 * BATCH_SIZE];
+        public final UUIDv7Generator generator = UUIDv7Generator.create();
+    }
+
+    @Benchmark
+    @BenchmarkMode(Mode.Throughput)
+    @OperationsPerInvocation(BATCH_SIZE)
+    public long[] optimizedFillLongBatch(ThreadBuffers buffers) {
+        UUIDv7.fill(buffers.longs, 0, BATCH_SIZE);
+        return buffers.longs;
+    }
+
+    @Benchmark
+    @BenchmarkMode(Mode.Throughput)
+    @OperationsPerInvocation(BATCH_SIZE)
+    public byte[] optimizedFillByteBatch(ThreadBuffers buffers) {
+        UUIDv7.fill(buffers.bytes, 0, BATCH_SIZE);
+        return buffers.bytes;
+    }
+
+    @Benchmark
+    @BenchmarkMode(Mode.Throughput)
+    public UUID optimizedGeneratorInstance(ThreadBuffers buffers) {
+        return buffers.generator.next();
+    }
+
+    @Benchmark
+    @BenchmarkMode(Mode.Throughput)
+    public String optimizedFastString() {
+        return UUIDv7.randomUUIDString();
+    }
+
+    @Benchmark
+    @BenchmarkMode(Mode.Throughput)
+    @Threads(8)
+    public UUID contendedOptimizedFast() {
+        return UUIDv7.randomUUID();
+    }
+
+    @Benchmark
+    @BenchmarkMode(Mode.Throughput)
+    @Threads(8)
+    public UUID contendedUuidCreatorFast() {
+        return UuidCreator.getTimeOrderedEpochFast();
+    }
+
+    @Benchmark
+    @BenchmarkMode(Mode.Throughput)
+    @Threads(8)
+    public UUID contendedJugEpoch() {
+        return jugEpoch.generate();
     }
 
     static final class LegacyThreadLocalRandomV7 {
