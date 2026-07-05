@@ -1,0 +1,40 @@
+name: Build
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test (JDK ${{ matrix.java }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 17 = baseline (maven.compiler.release), 21 = virtual threads path, 25 = latest LTS
+        java: [ 17, 21, 25 ]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+
+      # gpg.skip: artifact signing only happens in the release workflow
+      - name: Build and test
+        run: mvn -B -ntp verify -Dgpg.skip=true
+
+      - name: Compile benchmarks jar
+        if: matrix.java == 17
+        run: mvn -B -ntp -Pbenchmarks -DskipTests package

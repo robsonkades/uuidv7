@@ -1,0 +1,94 @@
+name: Release
+
+# Manually triggered release pipeline:
+#   1. sets the project version in pom.xml
+#   2. builds and runs the full test suite
+#   3. commits the version bump, tags it (v<version>) and pushes
+#   4. deploys the signed artifacts to Maven Central (central-publishing-maven-plugin)
+#   5. creates the GitHub Release with the jars attached and generated notes
+#
+# Required repository secrets:
+#   CENTRAL_USERNAME       - Sonatype Central Portal token username
+#   CENTRAL_PASSWORD       - Sonatype Central Portal token password
+#   MAVEN_GPG_PRIVATE_KEY  - ASCII-armored GPG private key used for signing
+#   MAVEN_GPG_PASSPHRASE   - passphrase of that key
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 1.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Validate version
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
+            echo "::error::Invalid version '$VERSION' (expected e.g. 1.1.0 or 1.1.0-RC1)"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Fail if tag already exists
+        run: |
+          if git rev-parse -q --verify "refs/tags/v$VERSION" > /dev/null; then
+            echo "::error::Tag v$VERSION already exists"
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+          server-id: central
+          server-username: CENTRAL_USERNAME
+          server-password: CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+      - name: Set release version
+        run: mvn -B -ntp versions:set -DnewVersion="$VERSION" -DgenerateBackupPoms=false
+
+      - name: Build and test
+        run: mvn -B -ntp verify -Dgpg.skip=true
+
+      - name: Commit version bump and tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet pom.xml; then
+            git add pom.xml
+            git commit -m "Release $VERSION"
+          fi
+          git tag -a "v$VERSION" -m "Release $VERSION"
+          git push origin HEAD "v$VERSION"
+
+      - name: Deploy to Maven Central
+        run: mvn -B -ntp deploy -DskipTests
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v$VERSION" \
+            "target/uuidv7-$VERSION.jar" \
+            "target/uuidv7-$VERSION-sources.jar" \
+            "target/uuidv7-$VERSION-javadoc.jar" \
+            --title "v$VERSION" \
+            --generate-notes
