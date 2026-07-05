@@ -39,7 +39,7 @@ The library exposes the following generation APIs:
 <dependency>
   <groupId>io.github.robsonkades</groupId>
   <artifactId>uuidv7</artifactId>
-  <version>1.0.1</version>
+  <version>1.1.0</version>
 </dependency>
 ```
 
