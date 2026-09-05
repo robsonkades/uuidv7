@@ -52,6 +52,12 @@ public class UUIDv7Benchmark {
 
     @Benchmark
     @BenchmarkMode(Mode.Throughput)
+    public UUID secureUnordered() {
+        return UUIDv7.secureUnorderedUUID();
+    }
+
+    @Benchmark
+    @BenchmarkMode(Mode.Throughput)
     public UUID uuidCreator() {
         return UuidCreator.getTimeOrderedEpoch();
     }
@@ -143,6 +149,12 @@ public class UUIDv7Benchmark {
     @BenchmarkMode(Mode.Throughput)
     public String optimizedFastString() {
         return UUIDv7.randomUUIDString();
+    }
+
+    @Benchmark
+    @BenchmarkMode(Mode.Throughput)
+    public String fastUuidToString() {
+        return UUIDv7.randomUUID().toString();
     }
 
     @Benchmark
