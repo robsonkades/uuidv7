@@ -5,7 +5,6 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
-import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Objects;
 import java.util.UUID;
@@ -28,18 +27,23 @@ import java.util.concurrent.locks.ReentrantLock;
  *   values produced by the same thread remain strictly increasing even when
  *   multiple UUIDs are created within the same millisecond.</li>
  *   <li>{@link #randomUUIDString()} produces the canonical 36-character string
- *   form directly, skipping the intermediate {@link UUID} allocation.</li>
+ *   form through the JDK UUID formatter.</li>
  *   <li>{@link #fill(long[], int, int)} and {@link #fill(byte[], int, int)}
  *   generate UUIDs in bulk with zero allocations, amortizing clock reads and
  *   per-thread state lookups across the whole batch.</li>
- *   <li>{@link #secureRandomUUID()} favors unpredictability. It uses
- *   {@link SecureRandom} to seed and advance the random fields, which improves
- *   resistance to prediction at a materially higher cost per UUID.</li>
+ *   <li>{@link #secureMonotonicUUID()} uses secure entropy for seeds and
+ *   bounded random increments, preserving ordering per thread.</li>
+ *   <li>{@link #secureUnorderedUUID()} draws all 74 payload bits from
+ *   {@link SecureRandom} for every UUID, without monotonic sequencing.</li>
  * </ul>
  *
  * <p>For callers that already confine work to a single thread (event loops,
  * actors, partitioned pipelines), {@link UUIDv7Generator} offers an instance
  * API without the per-call {@link ThreadLocal} lookup.</p>
+ *
+ * <p>Bulk allocation claims describe warmed-up generation into caller-owned
+ * buffers. Initial state creation and contended lock bookkeeping can allocate;
+ * no per-UUID objects or temporary batch arrays are created by the bulk API.</p>
  *
  * <p>All static methods are thread-safe, including when invoked from virtual
  * threads: virtual threads are transparently routed to a striped pool of
@@ -54,17 +58,17 @@ import java.util.concurrent.locks.ReentrantLock;
  * {@value #CACHED_CLOCK_PROPERTY} to {@code true} enables a cached clock
  * updated by a daemon thread roughly every 0.5&nbsp;ms, replacing the
  * {@link System#currentTimeMillis()} call on the hot path with a plain
- * volatile read. The monotonic state machine absorbs the (at most one to two
- * millisecond) jitter this introduces, so ordering and uniqueness guarantees
- * are unaffected; only the embedded creation timestamp may lag the true wall
- * clock by that amount.</p>
+ * volatile read. The timestamp is approximate: scheduling and JVM pauses can
+ * delay updates, with no fixed upper bound on staleness. Monotonic generators
+ * retain their ordering guarantees even while the cached time is unchanged.</p>
  *
- * <p>Edge conditions are handled defensively. If the observed wall clock moves
+ * <p>For monotonic generators, edge conditions are handled defensively.
+ * If the observed wall clock moves
  * backwards, generation continues from the last emitted timestamp and advances
  * the monotonic state instead of emitting a smaller UUID. Following the
  * counter-seeding guidance of RFC 9562 Section 6.2, the two most significant
  * bits of the monotonic {@code rand_b} counter are seeded to zero, which
- * guarantees at least 2^60 increments of headroom per millisecond; if the
+ * guarantees at least 2^60 counter positions of headroom per millisecond; if the
  * counter space is nevertheless exhausted, the generator advances to the next
  * logical millisecond rather than knowingly wrapping and returning a duplicate
  * value.</p>
@@ -118,11 +122,6 @@ public final class UUIDv7 {
     private static final long VARIANT_BITS = 0x8000000000000000L;
     private static final long SPLITMIX64_GAMMA = 0x9E3779B97F4A7C15L;
 
-    private static final byte[] HEX_DIGITS = {
-            '0', '1', '2', '3', '4', '5', '6', '7',
-            '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'
-    };
-
     static final VarHandle LONG_BE =
             MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.BIG_ENDIAN);
 
@@ -169,9 +168,9 @@ public final class UUIDv7 {
     /**
      * Generates a UUIDv7 and returns its canonical 36-character string form.
      *
-     * <p>Equivalent to {@code randomUUID().toString()} but formats the value
-     * directly from the generator state, skipping the intermediate
-     * {@link UUID} allocation.</p>
+     * <p>Equivalent to {@code randomUUID().toString()}. It delegates canonical
+     * formatting to the JDK, whose compact-string implementation is optimized
+     * for the active Java release.</p>
      *
      * @return the canonical lowercase hexadecimal representation of a new
      *         RFC 9562-compliant UUIDv7
@@ -249,6 +248,9 @@ public final class UUIDv7 {
 
     /**
      * Generates a UUIDv7 using {@link SecureRandom}-backed entropy.
+     * This is the compatibility alias for {@link #secureMonotonicUUID()},
+     * including its bounded-increment predictability. It does not draw a fresh
+     * 74-bit random payload on every call; see {@link #secureUnorderedUUID()}.
      *
      * <p>This method preserves the same RFC 9562 bit layout as
      * {@link #randomUUID()}, but it draws the random fields from a per-thread
@@ -269,11 +271,47 @@ public final class UUIDv7 {
      *         48-bit UUIDv7 timestamp range
      */
     public static UUID secureRandomUUID() {
+        return secureMonotonicUUID();
+    }
+
+    /**
+     * Generates a UUIDv7 with secure seeds and monotonic random increments.
+     * Values from this method and {@link #secureRandomUUID()} share the same
+     * sequence, strictly increasing per calling thread.
+     *
+     * <p>Within one logical millisecond, the next value from the same state
+     * advances by 1 to 1024 unless the counter overflows. Observing a value
+     * therefore narrows the next value to at most 1024 candidates in that case.
+     * Use {@link #secureUnorderedUUID()} when fresh random payloads matter
+     * more than same-millisecond ordering. Neither API is a token generator.</p>
+     *
+     * @return a monotonic UUIDv7 backed by secure entropy
+     * @throws IllegalStateException if the timestamp range is exhausted
+     */
+    public static UUID secureMonotonicUUID() {
         long unixTsMs = currentUnixTimestamp();
         if (VirtualThreads.current()) {
             return SecureStripes.next(unixTsMs);
         }
         return SECURE_STATE.get().next(unixTsMs);
+    }
+
+    /**
+     * Generates a UUIDv7 with 74 fresh random payload bits from buffered
+     * {@link SecureRandom} output. No monotonic ordering is promised, including
+     * within one millisecond or across clock rollback. The timestamp uses the
+     * configured wall clock; it is not clamped to a previous UUID's timestamp.
+     * Calls do not advance the secure monotonic sequence.
+     *
+     * @return a UUIDv7 with a freshly randomized payload
+     * @throws IllegalStateException if the timestamp exceeds the 48-bit range
+     */
+    public static UUID secureUnorderedUUID() {
+        long unixTsMs = currentUnixTimestamp();
+        if (VirtualThreads.current()) {
+            return SecureStripes.stripe().nextUnordered(unixTsMs);
+        }
+        return SECURE_STATE.get().nextUnordered(unixTsMs);
     }
 
     static UUID assemble(long unixTsMs, int randA, long randB) {
@@ -304,9 +342,10 @@ public final class UUIDv7 {
     }
 
     static GeneratorState newGeneratorState() {
-        long threadId = Thread.currentThread().getId();
-        long seed = Seeder.NEXT.getAndAdd(SPLITMIX64_GAMMA) ^ mix64(threadId) ^ mix64(System.nanoTime());
-        return new GeneratorState(seed);
+        // Mix the sequence value so neighboring generators do not start one
+        // SplitMix64 step apart. No entropy-provider calls on this path after
+        // Seeder initialization.
+        return new GeneratorState(mix64(Seeder.NEXT.getAndAdd(SPLITMIX64_GAMMA)));
     }
 
     /**
@@ -336,26 +375,26 @@ public final class UUIDv7 {
     }
 
     /**
-     * Formats {@code (msb, lsb)} as the canonical lowercase UUID string without
-     * materializing a {@link UUID}.
+     * Formats {@code (msb, lsb)} as the canonical lowercase UUID string through
+     * the JDK implementation. HotSpot can eliminate the temporary UUID when it
+     * does not escape.
      */
     static String toCanonicalString(long msb, long lsb) {
-        byte[] buf = new byte[36];
-        writeHex(buf, 0, msb >>> 32, 8);
-        buf[8] = '-';
-        writeHex(buf, 9, msb >>> 16, 4);
-        buf[13] = '-';
-        writeHex(buf, 14, msb, 4);
-        buf[18] = '-';
-        writeHex(buf, 19, lsb >>> 48, 4);
-        buf[23] = '-';
-        writeHex(buf, 24, lsb, 12);
-        return new String(buf, StandardCharsets.ISO_8859_1);
+        return new UUID(msb, lsb).toString();
     }
 
-    private static void writeHex(byte[] dst, int pos, long value, int digits) {
-        for (int shift = (digits - 1) << 2; shift >= 0; shift -= 4) {
-            dst[pos++] = HEX_DIGITS[(int) (value >>> shift) & 0xF];
+    private static void writeBatch(long[] dst, int offset, int count, long msb, long firstLsb) {
+        for (int i = 0; i < count; i++) {
+            dst[offset++] = msb;
+            dst[offset++] = firstLsb + i;
+        }
+    }
+
+    private static void writeBatch(byte[] dst, int offset, int count, long msb, long firstLsb) {
+        for (int i = 0; i < count; i++) {
+            LONG_BE.set(dst, offset, msb);
+            LONG_BE.set(dst, offset + 8, firstLsb + i);
+            offset += 16;
         }
     }
 
@@ -375,8 +414,7 @@ public final class UUIDv7 {
      * from the same image.
      */
     private static final class Seeder {
-        static final AtomicLong NEXT = new AtomicLong(
-                mix64(System.nanoTime()) ^ mix64(System.currentTimeMillis()));
+        static final AtomicLong NEXT = new AtomicLong(new SecureRandom().nextLong());
     }
 
     /**
@@ -521,21 +559,44 @@ public final class UUIDv7 {
         }
 
         void fill(long[] dst, int offset, int count, long unixTsMs) {
+            if (count == 0) {
+                return;
+            }
+            long msb;
+            long firstLsb;
             lock.lock();
             try {
-                state.fill(dst, offset, count, unixTsMs);
+                if (!state.tryReserve(count, unixTsMs)) {
+                    // Rollover can change the MSB within the batch.
+                    state.fill(dst, offset, count, unixTsMs);
+                    return;
+                }
+                msb = state.msb();
+                firstLsb = state.lsb() - (count - 1L);
             } finally {
                 lock.unlock();
             }
+            writeBatch(dst, offset, count, msb, firstLsb);
         }
 
         void fill(byte[] dst, int offset, int count, long unixTsMs) {
+            if (count == 0) {
+                return;
+            }
+            long msb;
+            long firstLsb;
             lock.lock();
             try {
-                state.fill(dst, offset, count, unixTsMs);
+                if (!state.tryReserve(count, unixTsMs)) {
+                    state.fill(dst, offset, count, unixTsMs);
+                    return;
+                }
+                msb = state.msb();
+                firstLsb = state.lsb() - (count - 1L);
             } finally {
                 lock.unlock();
             }
+            writeBatch(dst, offset, count, msb, firstLsb);
         }
     }
 
@@ -557,7 +618,11 @@ public final class UUIDv7 {
         }
 
         static UUID next(long unixTsMs) {
-            return STRIPES[(int) mix64(Thread.currentThread().getId()) & MASK].next(unixTsMs);
+            return stripe().next(unixTsMs);
+        }
+
+        static SecureStripe stripe() {
+            return STRIPES[(int) mix64(Thread.currentThread().getId()) & MASK];
         }
     }
 
@@ -565,6 +630,15 @@ public final class UUIDv7 {
 
         final ReentrantLock lock = new ReentrantLock();
         final SecureGeneratorState state = new SecureGeneratorState();
+
+        UUID nextUnordered(long unixTsMs) {
+            lock.lock();
+            try {
+                return state.nextUnordered(unixTsMs);
+            } finally {
+                lock.unlock();
+            }
+        }
 
         UUID next(long unixTsMs) {
             long msb;
@@ -662,11 +736,28 @@ public final class UUIDv7 {
         }
 
         /**
-         * Bulk generation: the clock is observed once for the whole batch and
-         * the state fields stay in registers inside the loop. Values are
-         * strictly increasing within the batch.
+         * Reserves a positive-sized batch within one logical millisecond.
+         * On success, state describes the last reserved value. On failure,
+         * state is unchanged and the caller must handle counter rollover.
+         * A freshly seeded counter has enough headroom for any positive int.
          */
+        boolean tryReserve(int count, long unixTsMs) {
+            if (unixTsMs <= lastUnixTsMs && RAND_B_MASK - randB < count) {
+                return false;
+            }
+            advance(unixTsMs);
+            randB += count - 1L;
+            return true;
+        }
+
         void fill(long[] dst, int offset, int count, long unixTsMs) {
+            if (count == 0) {
+                return;
+            }
+            if (tryReserve(count, unixTsMs)) {
+                writeBatch(dst, offset, count, msb(), lsb() - (count - 1L));
+                return;
+            }
             int idx = offset;
             for (int i = 0; i < count; i++) {
                 advance(unixTsMs);
@@ -677,6 +768,13 @@ public final class UUIDv7 {
         }
 
         void fill(byte[] dst, int offset, int count, long unixTsMs) {
+            if (count == 0) {
+                return;
+            }
+            if (tryReserve(count, unixTsMs)) {
+                writeBatch(dst, offset, count, msb(), lsb() - (count - 1L));
+                return;
+            }
             int idx = offset;
             for (int i = 0; i < count; i++) {
                 advance(unixTsMs);
@@ -757,13 +855,35 @@ public final class UUIDv7 {
 
         private static final int BUFFER_SIZE = 512;
 
-        private final SecureRandom secureRandom = new SecureRandom();
+        private final SecureRandom secureRandom;
         private final byte[] entropy = new byte[BUFFER_SIZE];
         private int position = BUFFER_SIZE;
 
         private long lastUnixTsMs = -1L;
         private int randA;
         private long randB;
+
+        SecureGeneratorState() {
+            this(new SecureRandom());
+        }
+
+        SecureGeneratorState(SecureRandom secureRandom) {
+            this.secureRandom = Objects.requireNonNull(secureRandom);
+        }
+
+        SecureGeneratorState(SecureRandom secureRandom, long lastUnixTsMs, int randA, long randB) {
+            this(secureRandom);
+            this.lastUnixTsMs = lastUnixTsMs;
+            this.randA = randA & RAND_A_MASK;
+            this.randB = randB & RAND_B_MASK;
+        }
+
+        UUID nextUnordered(long unixTsMs) {
+            int randomA = (int) nextSecureLong() & RAND_A_MASK;
+            long randomB = nextSecureLong() & RAND_B_MASK;
+            return new UUID((unixTsMs << 16) | VERSION_BITS | randomA,
+                    VARIANT_BITS | randomB);
+        }
 
         /**
          * Produce the next UUID for the supplied (already normalized)
@@ -806,8 +926,10 @@ public final class UUIDv7 {
          * Advance the secure monotonic state.
          *
          * <p>The increment is a positive random value instead of a fixed step.
-         * This keeps same-millisecond UUIDs ordered while avoiding the
-         * predictability of a simple sequential counter. If the increment would
+         * This keeps same-millisecond UUIDs ordered, but limits the next value
+         * to 1024 candidates for consecutive outputs from the same state and
+         * logical timestamp, unless the counter overflows.
+         * If the increment would
          * overflow {@code randB}, the generator rolls forward to the next logical
          * millisecond and reseeds.</p>
          */

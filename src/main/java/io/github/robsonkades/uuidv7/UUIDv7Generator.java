@@ -69,7 +69,7 @@ public final class UUIDv7Generator {
 
     /**
      * Generates the next UUIDv7 and returns its canonical 36-character string
-     * form, skipping the intermediate {@link UUID} allocation.
+     * form through the JDK UUID formatter.
      *
      * @return the canonical lowercase hexadecimal representation of a new
      *         RFC 9562-compliant UUIDv7
